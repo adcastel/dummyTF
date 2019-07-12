@@ -24,7 +24,7 @@ int allreduce(size_t elements, float * buf){
 void communication(int layers, int * backward_neurons, float * buf, int * ready){
 	int l;
     int n = omp_get_thread_num();
-	for (l = layers-1; l >= 0; l--){
+	for (l = layers-1; l > 0; l--){ //input w is not updated
 		while(ready[l]==0); 
 		printf("Thread %d  Allreduce %d\n",n,backward_neurons[l]);
 		allreduce(backward_neurons[l],buf);
@@ -38,16 +38,16 @@ void computation(int layers, int * forward, int *  backward_cg,
 		int * backward_wu, int * ready){ 
 
     int n = omp_get_thread_num();
-	int l = 0;
-	for (l = 0; l < layers; l++){
-		printf("Thread %d sleep %d FP\n",n,forward[l]);
+	int l = 1; //input is skipped
+	for (l = 1; l < layers; l++){
+		printf("Thread %d usleep %d FP\n",n,forward[l]);
 		usleep(forward[l]); // FP
 	}
-	for (l = layers-1; l >= 0; l--){
-		printf("Thread %d sleep %d CG\n",n,backward_cg[l]);
+	for (l = layers-1; l > 0; l--){ //input is not updated
+		printf("Thread %d usleep %d CG\n",n,backward_cg[l]);
 		usleep(backward_cg[l]); // CG
 		ready[l] = 1;
-		printf("Thread %d sleep %d WU\n",n,backward_wu[l]);
+		printf("Thread %d usleep %d WU\n",n,backward_wu[l]);
 		usleep(backward_wu[l]); // WU
 	}
 }
@@ -194,7 +194,7 @@ fclose(fp_model);
     // Get the rank of the process
     int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-
+    omp_set_num_threads(2);
     #pragma omp parallel
 	{
 		nthreads = omp_get_num_threads();
