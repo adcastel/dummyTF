@@ -21,38 +21,48 @@ int allreduce(size_t elements, float * buf){
 }
 
 
-void communication(int layers, int * backward_neurons, float * buf, int * ready){
+void communication(int layers, int * backward_neurons, float * buf, int * ready, int rank){
 	int l;
     int n = omp_get_thread_num();
 	for (l = layers-1; l > 0; l--){ //input w is not updated
 		while(ready[l]==0); 
-		printf("Thread %d  Allreduce %d\n",n,backward_neurons[l]);
+		printf("Rank %d Thread %d Layer %d Allreduce %d\n",rank,n,l,backward_neurons[l]*sizeof(float));
 		allreduce(backward_neurons[l],buf);
-		ready[l] = 0; 
+		ready[l] = 2; 
 	}
 
 }
 
 
 void computation(int layers, int * forward, int *  backward_cg,
-		int * backward_wu, int * ready){ 
+		int * backward_wu, int * ready, int rank){ 
 
     int n = omp_get_thread_num();
 	int l = 1; //input is skipped
 	for (l = 1; l < layers; l++){
-		printf("Thread %d usleep %d FP\n",n,forward[l]);
+		printf("Rank %d Thread %d Layer %d usleep %d FP\n",rank,n,l,forward[l]);
 		usleep(forward[l]); // FP
 	}
 	for (l = layers-1; l > 0; l--){ //input is not updated
-		printf("Thread %d usleep %d CG\n",n,backward_cg[l]);
+		printf("Rank %d Thread %d Layer %d usleep %d CG\n",rank,n,l,backward_cg[l]);
 		usleep(backward_cg[l]); // CG
 		ready[l] = 1;
-		printf("Thread %d usleep %d WU\n",n,backward_wu[l]);
-		usleep(backward_wu[l]); // WU
+	//	while(ready[l] != 2);
+          //      printf("Rank %d Thread %d Layer %d usleep %d WU\n",rank,n,l,backward_wu[l]);
+	//	usleep(backward_wu[l]); // WU
+	//	ready[l]=0;
 	}
-}
+	for (l = layers-1; l > 0; l--){ //input is not updated
+	//	printf("Rank %d Thread %d Layer %d usleep %d CG\n",rank,n,l,backward_cg[l]);
+	//	usleep(backward_cg[l]); // CG
+	//	ready[l] = 1;
+		while(ready[l] != 2);
+                printf("Rank %d Thread %d Layer %d usleep %d WU\n",rank,n,l,backward_wu[l]);
+		usleep(backward_wu[l]); // WU
+		ready[l]=0;
+	}
 
- 
+} 
 
 
 const char* getfield(char* line, int num){
@@ -117,16 +127,10 @@ int main(int argc, char * argv []){
     char auxstr[200], auxstr2[200], *token, *str;
     printf("Model: %s\n", argv[1]);
     fp_model= fopen(argv[1], "r");
-    //printf("layers: %d\n",count_layers(fp_model));
 	int layers = count_layers(fp_model)-1; //we discard the info line
 
 
 
-//    int l,layers = 4;
-//	int forward[LAYERS] = { 2000000,5000000,3500000,2500000};
-//	int backward_cg[LAYERS] = { 100000,500000,350000,250000};
-//	int backward_wu[LAYERS] = { 10000,50000,35000,25000};
-//	int backward_neurons[LAYERS] = { 1000,5000,3500,2500};
     printf("layers = %d\n",layers);
 	int l;
 	int *type = malloc (layers * sizeof(int));
@@ -161,20 +165,20 @@ int main(int argc, char * argv []){
       backward_wu[i]    = getfield_int(line, 6);
       ready[i] = 0;
 
-      if ( !strcmp(typel, "input") ){ 
-    	type[i] = INPUT; 
+      if ( !strcmp(typel, "Input") ){ 
+    	type[i] = INPUT; nneurons[i]=0;forward[i]=0;backward_cg[i]=0;backward_wu[i]=0; 
     }
-    else if ( !strcmp(typel, "fc") ){ 
+    else if ( !strcmp(typel, "FC") ){ 
     	type[i] = FC;   
 	  }
-    else if ( !strcmp(typel, "conv") ){ 
+    else if ( !strcmp(typel, "Convolutional") ){ 
     	type[i] = CONV; 
 	} 
     else if ( !strcmp(typel, "apool") ){ 
-    	type[i] = APOOL;  
+    	type[i] = APOOL; nneurons[i]=0;forward[i]=0;backward_cg[i]=0;backward_wu[i]=0; 
     }
     else if ( !strcmp(typel, "mpool") ){ 
-    	type[i] = MPOOL;  
+    	type[i] = MPOOL;  nneurons[i]=0;forward[i]=0;backward_cg[i]=0;backward_wu[i]=0;
      }
 
 
@@ -201,15 +205,16 @@ fclose(fp_model);
 	}
 
 	for(s = 0; s < STEPS; s++){
+	printf("Starting STEP %d\n",s);
 		#pragma omp parallel num_threads(2)
 		{
 			if(omp_get_thread_num()==0)
 			{
-				communication(layers,nneurons,buf,ready);
+				communication(layers,nneurons,buf,ready,world_rank);
 			}
 			else
 			{
-				computation(layers,forward,backward_cg,backward_wu,ready);
+				computation(layers,forward,backward_cg,backward_wu,ready,world_rank);
 			}
 		}
 
