@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <string.h>
-#define STEPS 5
+#define STEPS 10
 #define MAX_LEN 1024
 //#define LAYERS  4
 
@@ -26,7 +26,7 @@ void communication(int layers, int * backward_neurons, float * buf, int * ready,
     int n = omp_get_thread_num();
 	for (l = layers-1; l > 0; l--){ //input w is not updated
 		while(ready[l]==0); 
-		printf("Rank %d Thread %d Layer %d Allreduce %d\n",rank,n,l,backward_neurons[l]*sizeof(float));
+//		printf("Rank %d Thread %d Layer %d Allreduce %d\n",rank,n,l,backward_neurons[l]*sizeof(float));
 		allreduce(backward_neurons[l],buf);
 		ready[l] = 2; 
 	}
@@ -40,24 +40,17 @@ void computation(int layers, int * forward, int *  backward_cg,
     int n = omp_get_thread_num();
 	int l = 1; //input is skipped
 	for (l = 1; l < layers; l++){
-		printf("Rank %d Thread %d Layer %d usleep %d FP\n",rank,n,l,forward[l]);
+//		printf("Rank %d Thread %d Layer %d usleep %d FP\n",rank,n,l,forward[l]);
 		usleep(forward[l]); // FP
 	}
 	for (l = layers-1; l > 0; l--){ //input is not updated
-		printf("Rank %d Thread %d Layer %d usleep %d CG\n",rank,n,l,backward_cg[l]);
+//		printf("Rank %d Thread %d Layer %d usleep %d CG\n",rank,n,l,backward_cg[l]);
 		usleep(backward_cg[l]); // CG
 		ready[l] = 1;
-	//	while(ready[l] != 2);
-          //      printf("Rank %d Thread %d Layer %d usleep %d WU\n",rank,n,l,backward_wu[l]);
-	//	usleep(backward_wu[l]); // WU
-	//	ready[l]=0;
 	}
 	for (l = layers-1; l > 0; l--){ //input is not updated
-	//	printf("Rank %d Thread %d Layer %d usleep %d CG\n",rank,n,l,backward_cg[l]);
-	//	usleep(backward_cg[l]); // CG
-	//	ready[l] = 1;
 		while(ready[l] != 2);
-                printf("Rank %d Thread %d Layer %d usleep %d WU\n",rank,n,l,backward_wu[l]);
+                //printf("Rank %d Thread %d Layer %d usleep %d WU\n",rank,n,l,backward_wu[l]);
 		usleep(backward_wu[l]); // WU
 		ready[l]=0;
 	}
@@ -122,16 +115,25 @@ int main(int argc, char * argv []){
 	int nthreads,s;
     MPI_Init(&argc, &argv);
 
+    // Get the number of processes
+    int world_size;
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+
+    // Get the rank of the process
+    int world_rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    
     FILE *fp_model, *fp_results;
     int aux, j;
     char auxstr[200], auxstr2[200], *token, *str;
+      if(world_rank == 0)
     printf("Model: %s\n", argv[1]);
     fp_model= fopen(argv[1], "r");
 	int layers = count_layers(fp_model)-1; //we discard the info line
 
 
 
-    printf("layers = %d\n",layers);
+    //printf("layers = %d\n",layers);
 	int l;
 	int *type = malloc (layers * sizeof(int));
 	int *forward = malloc (layers * sizeof(int));
@@ -140,13 +142,6 @@ int main(int argc, char * argv []){
 	int *nneurons  = malloc (layers * sizeof(int));
 
 
-    int max_neurons = 0;
-	for(l=0;l<layers;l++){
-		if(nneurons[l] > max_neurons)
-			max_neurons = nneurons[l];
-	}
-
-	float * buf = malloc(max_neurons *  sizeof(float));
 
 	//int ready[LAYERS] = { 0,0,0,0};
 	int * ready = malloc (layers * sizeof(int));
@@ -182,22 +177,22 @@ int main(int argc, char * argv []){
      }
 
 
-
-      printf("type %d, neurons %d, forward %d, backward_cg %d, backward_wu %d\n",type[i],nneurons[i] , forward[i], backward_cg[i],backward_wu[i]);
+      if(world_rank == 0)
+          printf("type %d, neurons %d, forward %d, backward_cg %d, backward_wu %d\n",type[i],nneurons[i] , forward[i], backward_cg[i],backward_wu[i]);
       i++;
     }
 fclose(fp_model);
 
 
+    int max_neurons = 0;
+	for(l=0;l<layers;l++){
+		if(nneurons[l] > max_neurons)
+			max_neurons = nneurons[l];
+	}
+
+	float * buf = malloc(max_neurons *  sizeof(float));
 
 
-    // Get the number of processes
-    int world_size;
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-
-    // Get the rank of the process
-    int world_rank;
-    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     omp_set_num_threads(2);
     #pragma omp parallel
 	{
@@ -205,6 +200,7 @@ fclose(fp_model);
 	}
 
 	for(s = 0; s < STEPS; s++){
+      if(world_rank == 0)
 	printf("Starting STEP %d\n",s);
 		#pragma omp parallel num_threads(2)
 		{
