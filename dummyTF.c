@@ -24,15 +24,27 @@ int allreduce(size_t elements, float * buf){
 void communication(int layers, int * backward_neurons, float * buf, int * ready, int rank){
 	int l;
     int n = omp_get_thread_num();
+//     printf("communication %d/%d\n",rank,n);
 	for (l = layers-1; l > 0; l--){ //input w is not updated
-		while(ready[l]==0); 
-//		printf("Rank %d Thread %d Layer %d Allreduce %d\n",rank,n,l,backward_neurons[l]*sizeof(float));
+		while(ready[l]!=1); 
+//		printf("Rank %d Thread %d Layer %d Allreduce %lu\n",rank,n,l,backward_neurons[l]*sizeof(float));
 		allreduce(backward_neurons[l],buf);
 		ready[l] = 2; 
 	}
 
 }
 
+void computation_1p(int layers, int * forward, int *  backward_cg,
+		int * backward_wu, int * ready, int rank){ 
+
+	int l;
+	for (l = 1; l < layers; l++){
+		usleep(forward[l]); // FP
+		usleep(backward_cg[l]); // CG
+		usleep(backward_wu[l]); // WU
+	}
+
+} 
 
 void computation(int layers, int * forward, int *  backward_cg,
 		int * backward_wu, int * ready, int rank){ 
@@ -50,7 +62,7 @@ void computation(int layers, int * forward, int *  backward_cg,
 	}
 	for (l = layers-1; l > 0; l--){ //input is not updated
 		while(ready[l] != 2);
-                //printf("Rank %d Thread %d Layer %d usleep %d WU\n",rank,n,l,backward_wu[l]);
+  //              printf("Rank %d Thread %d Layer %d usleep %d WU\n",rank,n,l,backward_wu[l]);
 		usleep(backward_wu[l]); // WU
 		ready[l]=0;
 	}
@@ -106,7 +118,8 @@ int count_layers(FILE *fp){
 
 int main(int argc, char * argv []){
 
-    
+   double time = omp_get_wtime();    
+   double ttime = 0;    
 	if (argc < 2){
       perror("Usage: ./dummyTF model.csv\n");
       exit(-1);
@@ -123,9 +136,13 @@ int main(int argc, char * argv []){
     int world_rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
     
+   time = omp_get_wtime() - time;
+   ttime +=time;
+   printf("MPI initialization time = %f\n",time);    
     FILE *fp_model, *fp_results;
     int aux, j;
     char auxstr[200], auxstr2[200], *token, *str;
+   time = omp_get_wtime();
       if(world_rank == 0)
     printf("Model: %s\n", argv[1]);
     fp_model= fopen(argv[1], "r");
@@ -192,31 +209,49 @@ fclose(fp_model);
 
 	float * buf = malloc(max_neurons *  sizeof(float));
 
+   time = omp_get_wtime() - time;
+   ttime +=time;
+   printf("Model load time = %f\n",time);    
 
     omp_set_num_threads(2);
     #pragma omp parallel
 	{
 		nthreads = omp_get_num_threads();
 	}
-
-	for(s = 0; s < STEPS; s++){
-      if(world_rank == 0)
-	printf("Starting STEP %d\n",s);
-		#pragma omp parallel num_threads(2)
-		{
-			if(omp_get_thread_num()==0)
-			{
-				communication(layers,nneurons,buf,ready,world_rank);
-			}
-			else
-			{
-				computation(layers,forward,backward_cg,backward_wu,ready,world_rank);
-			}
+	printf("world size = %d\n", world_size);
+        if(world_size == 1){ // 1 proc, avoid threads and communications
+		for(s = 0; s < STEPS; s++){
+        		time = omp_get_wtime();
+			computation_1p(layers,forward,backward_cg,backward_wu,ready,world_rank);
+   			time = omp_get_wtime() - time;
+   			ttime +=time;
+   			printf("Step %d time = %f\n",s,time);    
 		}
+        }
+	else{
+		for(s = 0; s < STEPS; s++){
+//      		if(world_rank == 0)
+//				printf("Starting STEP %d\n",s);
+        		time = omp_get_wtime();
+			#pragma omp parallel num_threads(2)
+			{
+				if(omp_get_thread_num()==0)
+				{
+					communication(layers,nneurons,buf,ready,world_rank);
+				}
+				else
+				{
+					computation(layers,forward,backward_cg,backward_wu,ready,world_rank);
+				}
+			}
 
+   			time = omp_get_wtime() - time;
+   			ttime +=time;
+   			printf("Step %d time = %f\n",s,time);    
+		}
 	}
 	
-	
 	MPI_Finalize();
-
+   	printf("Total time = %f\n",ttime);    
+	
 }
